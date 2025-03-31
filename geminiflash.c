@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
+#include <limits.h>
 
 // Struct to store API response
 struct Response {
@@ -103,9 +107,43 @@ void parse_and_print_output(const char *json_str) {
     cJSON_Delete(json);  // Free memory
 }
 
+// Function to check if a path is absolute
+int is_absolute_path(const char *path) {
+    return path[0] == '/';
+}
+
+// Function to read file contents
+char* read_file_contents(const char *filepath) {
+    FILE *file = fopen(filepath, "r");
+    if (!file) {
+        fprintf(stderr, "Error opening file '%s': %s\n", filepath, strerror(errno));
+        return NULL;
+    }
+
+    // Get file size
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    // Allocate memory for file contents
+    char *contents = malloc(size + 1);
+    if (!contents) {
+        fprintf(stderr, "Memory allocation failed\n");
+        fclose(file);
+        return NULL;
+    }
+
+    // Read file contents
+    size_t read = fread(contents, 1, size, file);
+    contents[read] = '\0';
+    fclose(file);
+
+    return contents;
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        printf("Usage: %s <prompt text>\n", argv[0]);
+        printf("Usage: %s <prompt text or file path>\n", argv[0]);
         return 1;
     }
 
@@ -121,30 +159,67 @@ int main(int argc, char *argv[]) {
     CURLcode res;
     struct Response response = {NULL, 0};  // Initialize response struct
 
-    // Join all arguments into a single prompt
-    char input[2000] = "";
-    for (int i = 1; i < argc; i++) {
-        if (i > 1) strcat(input, " ");
-        strcat(input, argv[i]);
-    }
+    // Check if the first argument is a file path
+    char *input;
+    if (argc == 2) {
+        // Get current working directory
+        char cwd[4096];  // Using a reasonable fixed size
+        if (getcwd(cwd, sizeof(cwd)) == NULL) {
+            fprintf(stderr, "Error getting current directory: %s\n", strerror(errno));
+            return 1;
+        }
 
-    // Escape JSON special characters in the input
-    CURL *escape_curl = curl_easy_init();
-    char *escaped_input = curl_easy_escape(escape_curl, input, 0);
-    if (!escaped_input) {
-        fprintf(stderr, "Failed to escape input\n");
-        curl_easy_cleanup(escape_curl);
-        return 1;
+        // Construct full path if it's a relative path
+        char full_path[4096];  // Using a reasonable fixed size
+        if (is_absolute_path(argv[1])) {
+            strncpy(full_path, argv[1], sizeof(full_path) - 1);
+        } else {
+            snprintf(full_path, sizeof(full_path), "%s/%s", cwd, argv[1]);
+        }
+
+        // Check if file exists
+        struct stat st;
+        if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode)) {
+            // Read file contents
+            char *file_contents = read_file_contents(full_path);
+            if (!file_contents) {
+                return 1;
+            }
+
+            // Escape JSON special characters
+            CURL *escape_curl = curl_easy_init();
+            char *escaped_content = curl_easy_escape(escape_curl, file_contents, 0);
+            if (!escaped_content) {
+                fprintf(stderr, "Failed to escape file contents\n");
+                free(file_contents);
+                curl_easy_cleanup(escape_curl);
+                return 1;
+            }
+
+            input = escaped_content;
+            free(file_contents);
+            curl_easy_cleanup(escape_curl);
+        } else {
+            // Not a file, treat as regular prompt
+            input = strdup(argv[1]);
+        }
+    } else {
+        // Join all arguments into a single prompt
+        char temp_input[2000] = "";
+        for (int i = 1; i < argc; i++) {
+            if (i > 1) strcat(temp_input, " ");
+            strcat(temp_input, argv[i]);
+        }
+        input = strdup(temp_input);
     }
 
     // JSON payload
     char post_data[2500];
     snprintf(post_data, sizeof(post_data),
              "{ \"contents\": [{ \"parts\": [{ \"text\": \"%s\" }] }] }",
-             escaped_input);
+             input);
     
-    curl_free(escaped_input);
-    curl_easy_cleanup(escape_curl);
+    free(input);  // Free the input string
 
     // Create API URL with key
     char api_url[256];

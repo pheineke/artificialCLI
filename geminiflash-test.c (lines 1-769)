@@ -1,0 +1,368 @@
+// ... existing includes and definitions ...
+
+// --- Helper Functions ---
+
+// ... existing helper functions ...
+
+// Function to detect if a line is a code block marker (Definition)
+int is_code_block_marker(const char *line) {
+    if (strncmp(line, "```", 3) == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+// Function to detect if a line is a note block (Definition)
+int is_note_block(const char *line) {
+    return strncmp(line, "> ", 2) == 0;
+}
+
+// Function to detect if a line is a warning block (Definition)
+int is_warning_block(const char *line) {
+    return strncmp(line, "! ", 2) == 0;
+}
+
+// Enum for block state
+typedef enum {
+    BLOCK_NONE,
+    BLOCK_CODE,
+} BlockType;
+
+// Function to print headers
+void print_header(const char *line, int level, int width) {
+    // Remove leading '#'s and space
+    const char *header_text = line;
+    while (*header_text == '#') header_text++;
+    if (*header_text == ' ') header_text++;
+    
+    // Assign color based on header level
+    const char *color;
+    switch(level) {
+        case 1: color = ANSI_MAGENTA; break;
+        case 2: color = ANSI_BLUE; break;
+        case 3: color = ANSI_GREEN; break;
+        default: color = ANSI_RESET; break;
+    }
+
+    // Print header inside a box
+    print_box_top(width, color);
+    printf("%s%s %s", color, BOX_VERTICAL, ANSI_RESET);
+    printf("%s%s%s", ANSI_BOLD, header_text, ANSI_RESET);
+    size_t visible_len = visible_strlen(header_text);
+    int padding = width - 4 - visible_len;
+    if (padding < 0) padding = 0;
+    print_n_chars(" ", padding);
+    printf("%s%s%s\n", color, BOX_VERTICAL, ANSI_RESET);
+    print_box_bottom(width, color);
+}
+
+// Function to detect headers
+int is_header(const char *line, int *header_level) {
+    int level = 0;
+    while (*line == '#') {
+        level++;
+        line++;
+    }
+    if (level > 0 && *line == ' ') {
+        *header_level = level;
+        return 1;
+    }
+    return 0;
+}
+
+// Function to detect unordered list items
+int is_unordered_list(const char *line, const char **marker) {
+    if (line[0] == '*' && line[1] == ' ') {
+        *marker = "*";
+        return 1;
+    }
+    if (line[0] == '-' && line[1] == ' ') {
+        *marker = "-";
+        return 1;
+    }
+    if (line[0] == '+' && line[1] == ' ') {
+        *marker = "+";
+        return 1;
+    }
+    return 0;
+}
+
+// Function to detect ordered list items
+int is_ordered_list(const char *line, int *order_number) {
+    int num = 0;
+    const char *p = line;
+    while (*p >= '0' && *p <= '9') {
+        num = num * 10 + (*p - '0');
+        p++;
+    }
+    if (num > 0 && *p == '.' && p[1] == ' ') {
+        *order_number = num;
+        return 1;
+    }
+    return 0;
+}
+
+// Function to detect horizontal rules
+int is_horizontal_rule(const char *line) {
+    int len = strlen(line);
+    if (len < 3)
+        return 0;
+    for(int i=0; i<len; i++) {
+        if(line[i] != '-' && line[i] != '*' && line[i] != '_') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+// Function to print unordered list item
+void print_unordered_list_item(const char *marker, const char *text, int width) {
+    char display_text[width - 6];
+    snprintf(display_text, sizeof(display_text), "%s %s", marker, text);
+    printf("%s%s %s", ANSI_DIM, BOX_VERTICAL, ANSI_RESET);
+    printf("%s%s", ANSI_MAGENTA, display_text); // Using magenta for markers
+    size_t visible_len = visible_strlen(display_text);
+    int padding = width - 4 - visible_len;
+    if (padding < 0) padding = 0;
+    print_n_chars(" ", padding);
+    printf("%s%s%s\n", ANSI_MAGENTA, BOX_VERTICAL, ANSI_RESET);
+}
+
+// Function to print ordered list item
+void print_ordered_list_item(int number, const char *text, int width) {
+    char display_text[width - 6];
+    snprintf(display_text, sizeof(display_text), "%d. %s", number, text);
+    printf("%s%s %s", ANSI_DIM, BOX_VERTICAL, ANSI_RESET);
+    printf("%s%s", ANSI_GREEN, display_text); // Using green for numbers
+    size_t visible_len = visible_strlen(display_text);
+    int padding = width - 4 - visible_len;
+    if (padding < 0) padding = 0;
+    print_n_chars(" ", padding);
+    printf("%s%s%s\n", ANSI_GREEN, BOX_VERTICAL, ANSI_RESET);
+}
+
+// Function to print blockquote
+void print_blockquote(const char *text, int width) {
+    char display_text[width - 6];
+    snprintf(display_text, sizeof(display_text), "> %s", text);
+    printf("%s%s %s", ANSI_DIM, BOX_VERTICAL, ANSI_RESET);
+    printf("%s", display_text); // Using dim for blockquotes
+    size_t visible_len = visible_strlen(display_text);
+    int padding = width - 4 - visible_len;
+    if (padding < 0) padding = 0;
+    print_n_chars(" ", padding);
+    printf("%s%s%s\n", ANSI_DIM, BOX_VERTICAL, ANSI_RESET);
+}
+
+// Function to print horizontal rule
+void print_horizontal_rule(int width) {
+    // Print a dim horizontal line inside borders
+    printf("%s", ANSI_DIM);
+    printf("%s", BOX_VERTICAL);
+    print_n_chars(BOX_HORIZONTAL, width - 4);
+    printf("%s", BOX_VERTICAL);
+    printf("%s\n", ANSI_RESET);
+}
+
+// Function to print inline code
+void print_inline_code(const char *code) {
+    // Print code in distinct color, e.g., yellow
+    printf("%s`%s`%s", ANSI_YELLOW, code, ANSI_RESET);
+}
+
+// Simple print function with basic markdown/prefix handling (No BORDERS)
+void print_simple_line(const char *line) {
+    const char *p = line;
+    while (*p) {
+        if (*p == '`') {
+            // Start of inline code
+            p++;
+            const char *code_start = p;
+            while (*p && *p != '`') p++;
+            if (*p == '`') {
+                size_t code_len = p - code_start;
+                char *code = malloc(code_len + 1);
+                if (code) {
+                    strncpy(code, code_start, code_len);
+                    code[code_len] = '\0';
+                    print_inline_code(code);
+                    free(code);
+                }
+                p++; // Skip closing `
+            } else {
+                // No closing backtick, print the rest
+                printf("%s", code_start);
+            }
+        } else if ((*p == '*' && *(p+1) == '*')) {
+            // Bold: **text**
+            p +=2;
+            const char *bold_start = p;
+            while (*p && !( *p == '*' && *(p+1) == '*' )) p++;
+            if (*p == '*' && *(p+1) == '*') {
+                size_t bold_len = p - bold_start;
+                char *bold = malloc(bold_len + 1);
+                if (bold) {
+                    strncpy(bold, bold_start, bold_len);
+                    bold[bold_len] = '\0';
+                    printf("%s%s%s", ANSI_BOLD, bold, ANSI_RESET);
+                    free(bold);
+                }
+                p +=2; // Skip closing **
+            } else {
+                // No closing **, print as is
+                printf("**%s", bold_start);
+            }
+        } else if ((*p == '*' )) {
+            // Italic: *text*
+            p +=1;
+            const char *italic_start = p;
+            while (*p && *p != '*' ) p++;
+            if (*p == '*') {
+                size_t italic_len = p - italic_start;
+                char *italic = malloc(italic_len + 1);
+                if (italic) {
+                    strncpy(italic, italic_start, italic_len);
+                    italic[italic_len] = '\0';
+                    printf("%s%s%s", ANSI_DIM, italic, ANSI_RESET);
+                    free(italic);
+                }
+                p++; // Skip closing *
+            } else {
+                // No closing *, print as is
+                printf("*%s", italic_start);
+            }
+        } else {
+            // Regular character
+            printf("%c", *p);
+            p++;
+        }
+    }
+    printf("\n");
+}
+
+// --- Function to print formatted text (REVISED FOR NEW STYLE) ---
+void print_formatted_text(const char *text) {
+    char *text_copy = strdup(text);
+    if (!text_copy) return;
+
+    int term_width = get_terminal_width();
+    if (term_width < 20) term_width = 20; // Minimum sensible width
+
+    BlockType current_block = BLOCK_NONE;
+    char *line = strtok(text_copy, "\n");
+    int first_line_after_block = 1; // Flag to add spacing
+    int buffer_len = 0;
+    char buffer[10000] = {0}; // Buffer to collect code between markers
+
+    while (line != NULL) {
+        if (is_code_block_marker(line)) { // <--- Call is now valid
+            if (current_block == BLOCK_CODE) {
+                // --- End of Code Block ---
+                if (buffer_len > 0) {
+                    // Print the buffered code inside a box without title
+                    print_box_top(term_width, ANSI_CYAN);
+                    
+                    // Print each line of the buffered code
+                    char *code_line = strtok(buffer, "\n");
+                    while (code_line != NULL) {
+                        print_bordered_line(code_line, term_width, ANSI_CYAN, ANSI_CYAN, "  ");
+                        code_line = strtok(NULL, "\n");
+                    }
+                    
+                    print_box_bottom(term_width, ANSI_CYAN);
+                    
+                    // Reset buffer
+                    buffer[0] = '\0';
+                    buffer_len = 0;
+                }
+                current_block = BLOCK_NONE;
+                first_line_after_block = 1;
+            } else {
+                // --- Start of Code Block ---
+                if (!first_line_after_block) {
+                    printf("\n");
+                }
+                
+                // Just mark the beginning of a code block, don't print anything yet
+                current_block = BLOCK_CODE;
+            }
+        } else if (current_block == BLOCK_CODE) {
+            // --- Inside Code Block: Buffer the lines ---
+            if (buffer_len + strlen(line) + 2 < sizeof(buffer)) {
+                // Add line to buffer
+                strcat(buffer, line);
+                strcat(buffer, "\n");
+                buffer_len += strlen(line) + 1;
+            }
+            first_line_after_block = 0;
+        } else {
+            // --- Regular Text, Header, List, Blockquote, Horizontal Rule ---
+            int header_level;
+            const char *unordered_marker;
+            int ordered_number;
+            if (is_header(line, &header_level)) {
+                // Handle header
+                print_header(line, header_level, term_width);
+            } else if (is_unordered_list(line, &unordered_marker)) {
+                // Handle unordered list item
+                // Get list item text
+                const char *item_text = line;
+                while (*item_text != ' ' && *item_text != '\0') item_text++;
+                if (*item_text == ' ') item_text++;
+                print_unordered_list_item(unordered_marker, item_text, term_width);
+            } else if (is_ordered_list(line, &ordered_number)) {
+                // Handle ordered list item
+                // Get list item text
+                const char *item_text = line;
+                while (*item_text != '.' && *item_text != '\0') item_text++;
+                if (*item_text == '.') item_text++;
+                if (*item_text == ' ') item_text++;
+                print_ordered_list_item(ordered_number, item_text, term_width);
+            } else if (is_horizontal_rule(line)) {
+                // Handle horizontal rule
+                print_horizontal_rule(term_width);
+            } else if (is_note_block(line)) {
+                // Handle note
+                print_blockquote(line + 2, term_width);
+            } else if (is_warning_block(line)) {
+                // Handle warning
+                print_blockquote(line + 2, term_width); // You may want different styling
+            } else {
+                // Regular text
+                if (strlen(line) > 0) {
+                    int is_note_or_warning = is_note_block(line) || is_warning_block(line); // Check type
+                    if (first_line_after_block && is_note_or_warning) {
+                        printf("\n");
+                    }
+                    print_simple_line(line);
+                    // Treat consecutive notes/warnings like block separators for spacing
+                    first_line_after_block = is_note_or_warning;
+                } else {
+                    if (!first_line_after_block) {
+                        printf("\n");
+                        first_line_after_block = 1;
+                    }
+                }
+            }
+        }
+
+        line = strtok(NULL, "\n");
+    }
+
+    // Close the code block if the text ended while inside one
+    if (current_block == BLOCK_CODE && buffer_len > 0) {
+        // Print any remaining buffered code
+        print_box_top(term_width, ANSI_CYAN);
+        // No title
+        char *code_line = strtok(buffer, "\n");
+        while (code_line != NULL) {
+            print_bordered_line(code_line, term_width, ANSI_CYAN, ANSI_CYAN, "  ");
+            code_line = strtok(NULL, "\n");
+        }
+        print_box_bottom(term_width, ANSI_CYAN);
+    }
+
+    free(text_copy);
+}
+
+// ... existing parse_and_print_output() ... 

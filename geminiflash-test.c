@@ -30,7 +30,13 @@
 #define BOX_HORIZONTAL   "─"
 #define BOX_VERTICAL     "│"
 
-// --- Helper Functions (Keep as before) ---
+// --- Function Prototypes ---
+int is_note_block(const char *line);
+int is_warning_block(const char *line);
+int is_code_block_marker(const char *line); // Also declare this one for print_formatted_text
+
+
+// --- Helper Functions ---
 
 // Get terminal width
 int get_terminal_width() {
@@ -59,10 +65,7 @@ size_t visible_strlen(const char *str) {
             in_escape = 0;
         } else if (!in_escape) {
             // Basic handling for multi-byte UTF-8 chars (crude approximation)
-            // A more accurate way would involve mbrlen or similar.
-            // This assumes box characters are the main multi-byte chars we care about here.
             if ((unsigned char)str[i] >= 0x80) {
-                 // Count potential start of multi-byte seq, but only once per seq
                  if (i == 0 || (unsigned char)str[i-1] < 0x80 || ((unsigned char)str[i-1] >= 0xc0)) {
                       len++;
                  }
@@ -86,8 +89,6 @@ void print_n_chars(const char *s, int n) {
 void print_box_top(int width, const char *color) {
     printf("%s", color);
     printf(BOX_TOP_LEFT);
-    // Ensure width accounts for box characters (often wider than 1 column)
-    // This is tricky without a proper wcswidth function, adjust manually if needed
     print_n_chars(BOX_HORIZONTAL, width - 2);
     printf(BOX_TOP_RIGHT);
     printf(ANSI_RESET "\n");
@@ -124,14 +125,13 @@ void print_bordered_line(const char *text, int width, const char *line_color, co
         size_t last_space_actual = 0;
         size_t last_space_visible = 0;
         int in_escape = 0;
-        int can_wrap_here = 0; // Flag to indicate if current position is suitable for wrapping
+        int can_wrap_here = 0;
 
-        // Find the wrap point for the current line
         for (size_t i = 0; ; ++i) {
-             can_wrap_here = 0; // Reset for each character
-             if (current_pos[i] == '\0' || current_pos[i] == '\n') { // End of string or explicit newline
+             can_wrap_here = 0;
+             if (current_pos[i] == '\0' || current_pos[i] == '\n') {
                 line_len_actual = i;
-                can_wrap_here = 0; // Don't wrap after the break char
+                can_wrap_here = 0;
                 break;
             }
 
@@ -141,24 +141,18 @@ void print_bordered_line(const char *text, int width, const char *line_color, co
                 in_escape = 0;
             } else if (!in_escape) {
                 line_len_visible++;
-                 // Simple check for space, could add other wrap points like '-'
                 if (current_pos[i] == ' ') {
                     last_space_actual = i;
                     last_space_visible = line_len_visible;
                     can_wrap_here = 1;
                 } else {
-                     // Allow wrapping after punctuation too? e.g. ',' '.'
-                     // if (strchr(",.-", current_pos[i])) can_wrap_here = 1;
-                     can_wrap_here = 1; // Allow breaking mid-word if necessary
+                     can_wrap_here = 1;
                 }
             }
-            // Check AFTER incrementing visible length
             if (line_len_visible > available_width) {
-                // Need to wrap
-                if (last_space_visible > 0) { // Wrap at the last suitable space
+                if (last_space_visible > 0) {
                     line_len_actual = last_space_actual;
-                } else { // No suitable space found, force break at available_width
-                    // Rewind actual length to match visible length limit
+                } else {
                     size_t rewind_actual = 0;
                     size_t rewind_visible = 0;
                     int esc = 0;
@@ -170,26 +164,21 @@ void print_bordered_line(const char *text, int width, const char *line_color, co
                     }
                     line_len_actual = rewind_actual;
                 }
-                can_wrap_here = 0; // Don't wrap after the break point
-                break; // Stop processing this line segment
+                can_wrap_here = 0;
+                break;
             }
-             // This needs to be before the length check if we want to keep track of actual chars processed
-             line_len_actual = i + 1; // Increment actual length processed so far
+             line_len_actual = i + 1;
         }
 
-
-        // Print the line segment
-        printf("%s%s %s", border_color, BOX_VERTICAL, ANSI_RESET); // Left border
+        printf("%s%s %s", border_color, BOX_VERTICAL, ANSI_RESET);
         if (line_color) printf("%s", line_color);
-        if (prefix && first_line) printf("%s", prefix); // Print prefix only on the first logical line
-        else if (prefix && !first_line) { // Indent subsequent wrapped lines
-             print_n_chars(" ", prefix_len_visible); // Use visible length for alignment
+        if (prefix && first_line) printf("%s", prefix);
+        else if (prefix && !first_line) {
+             print_n_chars(" ", prefix_len_visible);
         }
 
-        // Print the actual text segment
         printf("%.*s", (int)line_len_actual, current_pos);
 
-        // Calculate printed visible length again for padding (more reliable)
         char temp_segment[line_len_actual + 1];
         strncpy(temp_segment, current_pos, line_len_actual);
         temp_segment[line_len_actual] = '\0';
@@ -198,24 +187,19 @@ void print_bordered_line(const char *text, int width, const char *line_color, co
         int padding = available_width - printed_visible_len;
         if (padding < 0) padding = 0;
 
-        print_n_chars(" ", padding); // Right padding
+        print_n_chars(" ", padding);
 
         if (line_color) printf(ANSI_RESET);
-        printf(" %s%s%s\n", border_color, BOX_VERTICAL, ANSI_RESET); // Right border
+        printf(" %s%s%s\n", border_color, BOX_VERTICAL, ANSI_RESET);
 
-        // Move pointer past the printed segment
         current_pos += line_len_actual;
-        // Skip potential space or newline character we wrapped/broke at
         if (*current_pos == ' ' || *current_pos == '\n') {
-             // Special case: if we broke exactly at '\n', don't skip it twice
-             if (*current_pos == '\n' && line_len_actual > 0 && *(current_pos -1) != '\n') {
-                  // We already consumed the character that caused the break if it wasn't \0
-             } else {
-                current_pos++;
-             }
+            // Avoid double skip if we broke exactly at \n
+            if (!(*current_pos == '\n' && line_len_actual > 0 && *(current_pos - 1) != '\n')) {
+                 current_pos++;
+            }
         }
-
-        first_line = 0; // Subsequent lines are not the first
+        first_line = 0;
     }
     free(text_to_print);
 }
@@ -242,10 +226,10 @@ void print_simple_line(const char *line) {
         } else {
              printf("%s\n", line); // Fallback
         }
-    } else if (is_note_block(line)) {
+    } else if (is_note_block(line)) { // <--- Call is now valid
         // Note: > text
         printf(ANSI_BLUE "> %s" ANSI_RESET "\n", line + 2);
-    } else if (is_warning_block(line)) {
+    } else if (is_warning_block(line)) { // <--- Call is now valid
         // Warning: ! text
         printf(ANSI_YELLOW "! %s" ANSI_RESET "\n", line + 2);
     }
@@ -254,10 +238,6 @@ void print_simple_line(const char *line) {
         printf("%s\n", line);
     }
 }
-
-
-// --- End Helper Functions ---
-
 
 // Struct to store API response
 struct Response {
@@ -285,7 +265,7 @@ size_t write_callback(void *ptr, size_t size, size_t nmemb, void *userdata) {
 }
 
 
-// Function to detect if a line is a code block marker (Keep as before)
+// Function to detect if a line is a code block marker (Definition)
 int is_code_block_marker(const char *line) {
     if (strncmp(line, "```", 3) == 0) {
         return 1;
@@ -293,12 +273,12 @@ int is_code_block_marker(const char *line) {
     return 0;
 }
 
-// Function to detect if a line is a note block (Keep as before)
+// Function to detect if a line is a note block (Definition)
 int is_note_block(const char *line) {
     return strncmp(line, "> ", 2) == 0;
 }
 
-// Function to detect if a line is a warning block (Keep as before)
+// Function to detect if a line is a warning block (Definition)
 int is_warning_block(const char *line) {
     return strncmp(line, "! ", 2) == 0;
 }
@@ -307,10 +287,143 @@ int is_warning_block(const char *line) {
 typedef enum {
     BLOCK_NONE,
     BLOCK_CODE,
-    // We don't need separate block states for Note/Warning anymore
-    // as they are handled line-by-line without borders.
 } BlockType;
 
+// Function to print headers
+void print_header(const char *line, int level, int width) {
+    // Remove leading '#'s and space
+    const char *header_text = line;
+    while (*header_text == '#') header_text++;
+    if (*header_text == ' ') header_text++;
+    
+    // Assign color based on header level
+    const char *color;
+    switch(level) {
+        case 1: color = ANSI_MAGENTA; break;
+        case 2: color = ANSI_BLUE; break;
+        case 3: color = ANSI_GREEN; break;
+        default: color = ANSI_RESET; break;
+    }
+
+    // Print header inside a box
+    print_box_top(width, color);
+    printf("%s%s %s", color, BOX_VERTICAL, ANSI_RESET);
+    printf("%s%s%s", ANSI_BOLD, header_text, ANSI_RESET);
+    size_t visible_len = visible_strlen(header_text);
+    int padding = width - 4 - visible_len;
+    if (padding < 0) padding = 0;
+    print_n_chars(" ", padding);
+    printf("%s%s%s\n", color, BOX_VERTICAL, ANSI_RESET);
+    print_box_bottom(width, color);
+}
+
+// Function to detect headers
+int is_header(const char *line, int *header_level) {
+    int level = 0;
+    while (*line == '#') {
+        level++;
+        line++;
+    }
+    if (level > 0 && *line == ' ') {
+        *header_level = level;
+        return 1;
+    }
+    return 0;
+}
+
+// Function to detect unordered list items
+int is_unordered_list(const char *line, const char **marker) {
+    if (line[0] == '*' && line[1] == ' ') {
+        *marker = "*";
+        return 1;
+    }
+    if (line[0] == '-' && line[1] == ' ') {
+        *marker = "-";
+        return 1;
+    }
+    if (line[0] == '+' && line[1] == ' ') {
+        *marker = "+";
+        return 1;
+    }
+    return 0;
+}
+
+// Function to detect ordered list items
+int is_ordered_list(const char *line, int *order_number) {
+    int num = 0;
+    const char *p = line;
+    while (*p >= '0' && *p <= '9') {
+        num = num * 10 + (*p - '0');
+        p++;
+    }
+    if (num > 0 && *p == '.' && p[1] == ' ') {
+        *order_number = num;
+        return 1;
+    }
+    return 0;
+}
+
+// Function to detect horizontal rules
+int is_horizontal_rule(const char *line) {
+    int len = strlen(line);
+    if (len < 3)
+        return 0;
+    for(int i=0; i<len; i++) {
+        if(line[i] != '-' && line[i] != '*' && line[i] != '_') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+// Function to print unordered list items
+void print_unordered_list_item(const char *marker, const char *text, int width) {
+    char display_text[width - 6];
+    snprintf(display_text, sizeof(display_text), "%s %s", marker, text);
+    printf("%s%s %s", ANSI_DIM, BOX_VERTICAL, ANSI_RESET);
+    printf("%s%s", ANSI_MAGENTA, display_text); // Using magenta for markers
+    size_t visible_len = visible_strlen(display_text);
+    int padding = width - 4 - visible_len;
+    if (padding < 0) padding = 0;
+    print_n_chars(" ", padding);
+    printf("%s%s%s\n", ANSI_MAGENTA, BOX_VERTICAL, ANSI_RESET);
+}
+
+// Function to print ordered list items
+void print_ordered_list_item(int number, const char *text, int width) {
+    char display_text[width - 6];
+    snprintf(display_text, sizeof(display_text), "%d. %s", number, text);
+    printf("%s%s %s", ANSI_DIM, BOX_VERTICAL, ANSI_RESET);
+    printf("%s%s", ANSI_GREEN, display_text); // Using green for numbers
+    size_t visible_len = visible_strlen(display_text);
+    int padding = width - 4 - visible_len;
+    if (padding < 0) padding = 0;
+    print_n_chars(" ", padding);
+    printf("%s%s%s\n", ANSI_GREEN, BOX_VERTICAL, ANSI_RESET);
+}
+
+// Function to print blockquotes
+void print_blockquote(const char *text, int width) {
+    char display_text[width - 6];
+    snprintf(display_text, sizeof(display_text), "> %s", text);
+    printf("%s%s %s", ANSI_DIM, BOX_VERTICAL, ANSI_RESET);
+    printf("%s", display_text); // Using dim for blockquotes
+    size_t visible_len = visible_strlen(display_text);
+    int padding = width - 4 - visible_len;
+    if (padding < 0) padding = 0;
+    print_n_chars(" ", padding);
+    printf("%s%s%s\n", ANSI_DIM, BOX_VERTICAL, ANSI_RESET);
+}
+
+// Function to print horizontal rule
+void print_horizontal_rule(int width) {
+    // Print a dim horizontal line inside borders
+    printf("%s", ANSI_DIM);
+    printf("%s", BOX_VERTICAL);
+    print_n_chars(BOX_HORIZONTAL, width - 4);
+    printf("%s", BOX_VERTICAL);
+    printf("%s\n", ANSI_RESET);
+}
 
 // Function to print formatted text (REVISED FOR NEW STYLE)
 void print_formatted_text(const char *text) {
@@ -323,64 +436,98 @@ void print_formatted_text(const char *text) {
     BlockType current_block = BLOCK_NONE;
     char *line = strtok(text_copy, "\n");
     int first_line_after_block = 1; // Flag to add spacing
-
-    // Print overall title (optional, could be removed for cleaner look)
-    // print_box_top(term_width, ANSI_DIM);
-    // print_bordered_line(ANSI_BOLD ANSI_GREEN "Gemini Response" ANSI_RESET, term_width, NULL, ANSI_DIM, NULL);
-    // print_box_bottom(term_width, ANSI_DIM);
-    // printf("\n"); // Add a space after title
+    int buffer_len = 0;
+    char buffer[10000] = {0}; // Buffer to collect code between markers
 
     while (line != NULL) {
-        // Trim leading/trailing whitespace from line (optional but often helpful)
-        // (Implementation omitted for brevity, can be added if needed)
-
-        if (is_code_block_marker(line)) {
+        if (is_code_block_marker(line)) { // <--- Call is now valid
             if (current_block == BLOCK_CODE) {
                 // --- End of Code Block ---
-                print_box_bottom(term_width, ANSI_CYAN);
+                if (buffer_len > 0) {
+                    // Print the buffered code inside a box without title
+                    print_box_top(term_width, ANSI_CYAN);
+                    
+                    // Print each line of the buffered code
+                    char *code_line = strtok(buffer, "\n");
+                    while (code_line != NULL) {
+                        print_bordered_line(code_line, term_width, ANSI_CYAN, ANSI_CYAN, "  ");
+                        code_line = strtok(NULL, "\n");
+                    }
+                    
+                    print_box_bottom(term_width, ANSI_CYAN);
+                    
+                    // Reset buffer
+                    buffer[0] = '\0';
+                    buffer_len = 0;
+                }
                 current_block = BLOCK_NONE;
-                first_line_after_block = 1; // Ensures a blank line after code block
-                // Do not print the marker itself
+                first_line_after_block = 1;
             } else {
                 // --- Start of Code Block ---
-                 if (!first_line_after_block) {
-                    printf("\n"); // Add space before code block unless it's the very start
-                 }
-                print_box_top(term_width, ANSI_CYAN);
-                // Extract language hint if present (e.g., ```python)
-                const char* lang_hint = line + 3;
-                while (*lang_hint == ' ' || *lang_hint == '\t') lang_hint++; // Skip leading space
-                char title_buffer[100];
-                if (*lang_hint) {
-                     snprintf(title_buffer, sizeof(title_buffer), ANSI_BOLD ANSI_CYAN "Code (%s)" ANSI_RESET, lang_hint);
-                } else {
-                     snprintf(title_buffer, sizeof(title_buffer), ANSI_BOLD ANSI_CYAN "Code Block" ANSI_RESET);
+                if (!first_line_after_block) {
+                    printf("\n");
                 }
-                print_bordered_line(title_buffer, term_width, NULL, ANSI_CYAN, NULL);
+                
+                // Just mark the beginning of a code block, don't print anything yet
                 current_block = BLOCK_CODE;
-                 // Do not print the marker itself
             }
         } else if (current_block == BLOCK_CODE) {
-            // --- Inside Code Block ---
-            // Use print_bordered_line for code content
-            print_bordered_line(line, term_width, ANSI_CYAN, ANSI_CYAN, "  "); // Indent with 2 spaces
+            // --- Inside Code Block: Buffer the lines ---
+            if (buffer_len + strlen(line) + 2 < sizeof(buffer)) {
+                // Add line to buffer
+                strcat(buffer, line);
+                strcat(buffer, "\n");
+                buffer_len += strlen(line) + 1;
+            }
             first_line_after_block = 0;
         } else {
-            // --- Regular Text, Note, or Warning (Outside Code Block) ---
-            if (strlen(line) > 0) { // Only print non-empty lines
-                 if (first_line_after_block && (is_note_block(line) || is_warning_block(line))) {
-                      // Add spacing before note/warning if it follows a block or another note/warning
-                      printf("\n");
-                 }
-                 print_simple_line(line); // Use the borderless printing function
-                 first_line_after_block = is_note_block(line) || is_warning_block(line); // Treat notes/warnings like block separators for spacing
+            // --- Regular Text, Header, List, Blockquote, Horizontal Rule ---
+            int header_level;
+            const char *unordered_marker;
+            int ordered_number;
+            if (is_header(line, &header_level)) {
+                // Handle header
+                print_header(line, header_level, term_width);
+            } else if (is_unordered_list(line, &unordered_marker)) {
+                // Handle unordered list item
+                // Get list item text
+                const char *item_text = line;
+                while (*item_text != ' ' && *item_text != '\0') item_text++;
+                if (*item_text == ' ') item_text++;
+                print_unordered_list_item(unordered_marker, item_text, term_width);
+            } else if (is_ordered_list(line, &ordered_number)) {
+                // Handle ordered list item
+                // Get list item text
+                const char *item_text = line;
+                while (*item_text != '.' && *item_text != '\0') item_text++;
+                if (*item_text == '.') item_text++;
+                if (*item_text == ' ') item_text++;
+                print_ordered_list_item(ordered_number, item_text, term_width);
+            } else if (is_horizontal_rule(line)) {
+                // Handle horizontal rule
+                print_horizontal_rule(term_width);
+            } else if (is_note_block(line)) {
+                // Handle note
+                print_blockquote(line + 2, term_width);
+            } else if (is_warning_block(line)) {
+                // Handle warning
+                print_blockquote(line + 2, term_width); // You may want different styling
             } else {
-                 // Handle blank lines outside code blocks - print a newline
-                 // to preserve paragraph spacing, unless one was just added.
-                 if (!first_line_after_block) {
-                     printf("\n");
-                     first_line_after_block = 1; // Prevent multiple blank lines
-                 }
+                // Regular text
+                if (strlen(line) > 0) {
+                    int is_note_or_warning = is_note_block(line) || is_warning_block(line); // Check type
+                    if (first_line_after_block && is_note_or_warning) {
+                        printf("\n");
+                    }
+                    print_simple_line(line);
+                    // Treat consecutive notes/warnings like block separators for spacing
+                    first_line_after_block = is_note_or_warning;
+                } else {
+                    if (!first_line_after_block) {
+                        printf("\n");
+                        first_line_after_block = 1;
+                    }
+                }
             }
         }
 
@@ -388,7 +535,15 @@ void print_formatted_text(const char *text) {
     }
 
     // Close the code block if the text ended while inside one
-    if (current_block == BLOCK_CODE) {
+    if (current_block == BLOCK_CODE && buffer_len > 0) {
+        // Print any remaining buffered code
+        print_box_top(term_width, ANSI_CYAN);
+        // No title
+        char *code_line = strtok(buffer, "\n");
+        while (code_line != NULL) {
+            print_bordered_line(code_line, term_width, ANSI_CYAN, ANSI_CYAN, "  ");
+            code_line = strtok(NULL, "\n");
+        }
         print_box_bottom(term_width, ANSI_CYAN);
     }
 
@@ -406,14 +561,14 @@ void parse_and_print_output(const char *json_str) {
         fprintf(stderr, "Error parsing JSON: %s\n", cJSON_GetErrorPtr());
         print_box_top(term_width, ANSI_RED);
         print_bordered_line(ANSI_BOLD "JSON Parse Error" ANSI_RESET, term_width, NULL, ANSI_RED, NULL);
-        // Wrap error message and raw response within the error box
-        char *err_ptr_copy = strdup(cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "(Unknown parse error)");
+        const char *err_ptr_msg = cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "(Unknown parse error)";
+        char *err_ptr_copy = strdup(err_ptr_msg); // Use intermediate variable
         if (err_ptr_copy) {
             print_bordered_line(err_ptr_copy, term_width, ANSI_RED, ANSI_RED, "  ");
             free(err_ptr_copy);
         }
         print_bordered_line("--- Raw Response Snippet ---", term_width, ANSI_DIM, ANSI_RED, NULL);
-        char *raw_copy = strndup(json_str, 200); // Show only a snippet
+        char *raw_copy = strndup(json_str, 200);
         if(raw_copy) {
             char *line = strtok(raw_copy, "\n");
             int lines_shown = 0;
@@ -422,7 +577,7 @@ void parse_and_print_output(const char *json_str) {
                  line = strtok(NULL, "\n");
                  lines_shown++;
             }
-            if (line) print_bordered_line("...", term_width, ANSI_DIM, ANSI_RED, "  "); // Indicate truncation
+            if(line) print_bordered_line("...", term_width, ANSI_DIM, ANSI_RED, "  ");
             free(raw_copy);
         } else {
              print_bordered_line("(Could not copy raw response)", term_width, ANSI_DIM, ANSI_RED, "  ");
@@ -438,23 +593,26 @@ void parse_and_print_output(const char *json_str) {
         print_box_top(term_width, ANSI_RED);
         print_bordered_line(ANSI_BOLD "API Error" ANSI_RESET, term_width, NULL, ANSI_RED, NULL);
         if (cJSON_IsString(message) && message->valuestring) {
-            // Wrap the message string
             char* msg_copy = strdup(message->valuestring);
             if (msg_copy) {
                 print_bordered_line(msg_copy, term_width, ANSI_RED, ANSI_RED, "  ");
                 free(msg_copy);
+            } else { 
+                print_bordered_line("(Failed to copy error message)", term_width, ANSI_RED, ANSI_RED, "  "); 
             }
         } else {
             print_bordered_line("Unknown API Error structure.", term_width, ANSI_RED, ANSI_RED, "  ");
-            char* formatted_error = cJSON_Print(error); // Print details if possible
-             if (formatted_error) {
-                 char* err_copy = strdup(formatted_error);
-                 if(err_copy){
-                     print_bordered_line(err_copy, term_width, ANSI_DIM, ANSI_RED, "  ");
-                     free(err_copy);
-                 }
+            char* formatted_error = cJSON_Print(error);
+            if (formatted_error) {
+                char* err_copy = strdup(formatted_error);
+                if(err_copy){
+                    print_bordered_line(err_copy, term_width, ANSI_DIM, ANSI_RED, "  ");
+                    free(err_copy);
+                } else { 
+                    print_bordered_line("(Failed to copy error details)", term_width, ANSI_DIM, ANSI_RED, "  ");
+                }
                 free(formatted_error);
-             }
+            }
         }
         print_box_bottom(term_width, ANSI_RED);
         cJSON_Delete(json);
@@ -464,34 +622,54 @@ void parse_and_print_output(const char *json_str) {
     // --- Success Path ---
     cJSON *candidates = cJSON_GetObjectItemCaseSensitive(json, "candidates");
     if (!cJSON_IsArray(candidates) || cJSON_GetArraySize(candidates) == 0) {
-         // Keep this warning boxed too, as it's an issue with the response structure
          print_box_top(term_width, ANSI_YELLOW);
          print_bordered_line(ANSI_BOLD "API Warning" ANSI_RESET, term_width, NULL, ANSI_YELLOW, NULL);
          print_bordered_line("No 'candidates' array found or it's empty.", term_width, ANSI_YELLOW, ANSI_YELLOW, "  ");
-         // Maybe show raw response snippet here too?
          print_box_bottom(term_width, ANSI_YELLOW);
          cJSON_Delete(json);
          return;
     }
 
     cJSON *first_candidate = cJSON_GetArrayItem(candidates, 0);
-    if (!cJSON_IsObject(first_candidate)) { /* Handle error like above */ cJSON_Delete(json); return; }
+    if (!cJSON_IsObject(first_candidate)) { /* Handle error */
+        print_box_top(term_width, ANSI_YELLOW);
+        print_bordered_line(ANSI_BOLD "API Warning" ANSI_RESET, term_width, NULL, ANSI_YELLOW, NULL);
+        print_bordered_line("First candidate is not a valid object.", term_width, ANSI_YELLOW, ANSI_YELLOW, "  ");
+        print_box_bottom(term_width, ANSI_YELLOW);
+        cJSON_Delete(json); return;
+    }
     cJSON *content = cJSON_GetObjectItemCaseSensitive(first_candidate, "content");
-    if (!cJSON_IsObject(content)) { /* Handle error */ cJSON_Delete(json); return; }
+    if (!cJSON_IsObject(content)) { /* Handle error */
+        print_box_top(term_width, ANSI_YELLOW);
+        print_bordered_line(ANSI_BOLD "API Warning" ANSI_RESET, term_width, NULL, ANSI_YELLOW, NULL);
+        print_bordered_line("No 'content' object found in candidate.", term_width, ANSI_YELLOW, ANSI_YELLOW, "  ");
+        print_box_bottom(term_width, ANSI_YELLOW);
+        cJSON_Delete(json); return;
+     }
     cJSON *parts = cJSON_GetObjectItemCaseSensitive(content, "parts");
-    if (!cJSON_IsArray(parts) || cJSON_GetArraySize(parts) == 0) { /* Handle error */ cJSON_Delete(json); return; }
+    if (!cJSON_IsArray(parts) || cJSON_GetArraySize(parts) == 0) { /* Handle error */
+        print_box_top(term_width, ANSI_YELLOW);
+        print_bordered_line(ANSI_BOLD "API Warning" ANSI_RESET, term_width, NULL, ANSI_YELLOW, NULL);
+        print_bordered_line("No 'parts' array found or it's empty in content.", term_width, ANSI_YELLOW, ANSI_YELLOW, "  ");
+        print_box_bottom(term_width, ANSI_YELLOW);
+        cJSON_Delete(json); return;
+    }
     cJSON *first_part = cJSON_GetArrayItem(parts, 0);
-    if (!cJSON_IsObject(first_part)) { /* Handle error */ cJSON_Delete(json); return; }
+    if (!cJSON_IsObject(first_part)) { /* Handle error */
+        print_box_top(term_width, ANSI_YELLOW);
+        print_bordered_line(ANSI_BOLD "API Warning" ANSI_RESET, term_width, NULL, ANSI_YELLOW, NULL);
+        print_bordered_line("First part is not a valid object.", term_width, ANSI_YELLOW, ANSI_YELLOW, "  ");
+        print_box_bottom(term_width, ANSI_YELLOW);
+        cJSON_Delete(json); return;
+     }
     cJSON *text = cJSON_GetObjectItemCaseSensitive(first_part, "text");
 
     if (cJSON_IsString(text) && text->valuestring) {
-        // *** Use the NEW formatter for the actual Gemini response text ***
         print_formatted_text(text->valuestring);
     } else {
-        // Text missing, issue a warning (boxed)
          print_box_top(term_width, ANSI_YELLOW);
          print_bordered_line(ANSI_BOLD "API Warning" ANSI_RESET, term_width, NULL, ANSI_YELLOW, NULL);
-         print_bordered_line("Response structure OK, but text part is missing.", term_width, ANSI_YELLOW, ANSI_YELLOW, "  ");
+         print_bordered_line("Response structure OK, but 'text' field missing or not a string.", term_width, ANSI_YELLOW, ANSI_YELLOW, "  ");
          print_box_bottom(term_width, ANSI_YELLOW);
     }
 
@@ -506,12 +684,11 @@ int is_absolute_path(const char *path) {
 
 // Function to read file contents (Keep as before)
 char* read_file_contents(const char *filepath) {
-    FILE *file = fopen(filepath, "rb"); // Use "rb" for binary read
+    FILE *file = fopen(filepath, "rb");
     if (!file) {
         fprintf(stderr, "Error opening file '%s': %s\n", filepath, strerror(errno));
         return NULL;
     }
-
     fseek(file, 0, SEEK_END);
     long size = ftell(file);
      if (size == -1) {
@@ -523,18 +700,16 @@ char* read_file_contents(const char *filepath) {
         fclose(file);
         char *empty_content = malloc(1);
         if(empty_content) empty_content[0] = '\0';
+        else fprintf(stderr, "Malloc failed for empty file content\n");
         return empty_content;
     }
-
     rewind(file);
-
     char *contents = malloc(size + 1);
     if (!contents) {
         fprintf(stderr, "Memory allocation failed for file contents (%ld bytes)\n", size + 1);
         fclose(file);
         return NULL;
     }
-
     size_t read_size = fread(contents, 1, size, file);
     if (read_size != (size_t)size) {
         if (feof(file)) { fprintf(stderr, "Error reading file '%s': Unexpected end of file\n", filepath); }
@@ -544,7 +719,6 @@ char* read_file_contents(const char *filepath) {
         free(contents);
         return NULL;
     }
-
     contents[size] = '\0';
     fclose(file);
     return contents;
@@ -554,13 +728,14 @@ char* read_file_contents(const char *filepath) {
 char *escape_json_string(const char *input) {
     if (!input) return NULL;
     size_t len = strlen(input);
-    size_t buffer_size = len * 2 + 3;
+    size_t buffer_size = len * 2 + 3; // Initial estimate
     char *escaped = malloc(buffer_size);
     if (!escaped) return NULL;
     size_t j = 0;
     for (size_t i = 0; i < len; i++) {
-        if (j >= buffer_size - 7) { // Check space for \uXXXX + \\ + null
-            buffer_size = buffer_size * 2 + 10; // Increase buffer more aggressively
+        // Ensure enough space for worst-case expansion (\uXXXX is 6 chars, plus potentially \\)
+        if (j >= buffer_size - 7) {
+            buffer_size = buffer_size * 2 + 10; // Increase buffer size
             char *new_escaped = realloc(escaped, buffer_size);
             if (!new_escaped) { free(escaped); return NULL; }
             escaped = new_escaped;
@@ -576,18 +751,22 @@ char *escape_json_string(const char *input) {
             default:
                 // Escape control characters (U+0000 to U+001F)
                 if ((unsigned char)input[i] < 0x20) {
-                   snprintf(&escaped[j], 7, "\\u%04x", (unsigned char)input[i]); // Use snprintf for safety
-                   j += 6;
+                   // Use snprintf for safety, ensure null termination is handled by caller or later loop stage
+                   int written = snprintf(&escaped[j], 7, "\\u%04x", (unsigned char)input[i]);
+                   if (written == 6) { // Check if snprintf wrote the expected number of chars
+                       j += 6;
+                   } else {
+                       // Handle error: snprintf failed or wrote unexpected number of bytes
+                       fprintf(stderr, "Warning: snprintf failed during JSON escaping.\n");
+                       // Option: Skip this character or handle error differently
+                   }
                 } else {
-                    escaped[j++] = input[i]; // Keep other chars as is
+                    escaped[j++] = input[i]; // Keep other printable chars as is
                 }
                 break;
         }
     }
-    escaped[j] = '\0';
-    // Optional: Shrink buffer to actual size if memory is critical
-    // char *final_escaped = realloc(escaped, j + 1);
-    // return final_escaped ? final_escaped : escaped; // Return original if realloc fails
+    escaped[j] = '\0'; // Null-terminate the final string
     return escaped;
 }
 
@@ -604,7 +783,7 @@ int main(int argc, char *argv[]) {
     char *api_key = getenv("GEMINI_API_KEY");
     if (!api_key) {
         int term_width = get_terminal_width();
-        print_box_top(term_width, ANSI_RED); // Keep error boxed
+        print_box_top(term_width, ANSI_RED);
         print_bordered_line(ANSI_BOLD "Configuration Error" ANSI_RESET, term_width, NULL, ANSI_RED, NULL);
         print_bordered_line("GEMINI_API_KEY environment variable not set.", term_width, ANSI_RED, ANSI_RED, "->");
         print_bordered_line("Set it using: export GEMINI_API_KEY='your_api_key'", term_width, ANSI_DIM, ANSI_RED, "  ");
@@ -647,16 +826,16 @@ int main(int argc, char *argv[]) {
     if (!input_escaped) { fprintf(stderr, "Failed to escape input string for JSON.\n"); return 1; }
 
     // --- Construct JSON Payload ---
-    size_t post_data_size = strlen(input_escaped) + 100;
+    // Estimate size: base JSON structure + escaped input length + config + buffer
+    size_t json_base_len = strlen("{ \"contents\": [{ \"parts\": [{ \"text\": \"\" }] }], \"generationConfig\": { \"temperature\": 0.7 } }");
+    size_t post_data_size = json_base_len + strlen(input_escaped) + 50; // Add buffer
     char *post_data = malloc(post_data_size);
     if (!post_data) { fprintf(stderr, "Failed to allocate memory for POST data.\n"); free(input_escaped); return 1; }
-    // Using a safer model name, ensure it exists or change as needed
     snprintf(post_data, post_data_size, "{ \"contents\": [{ \"parts\": [{ \"text\": \"%s\" }] }], \"generationConfig\": { \"temperature\": 0.7 } }", input_escaped);
     free(input_escaped);
 
     // --- Prepare and Perform CURL Request ---
     char api_url[512];
-    // Ensure the model name here is correct for your key/project
     snprintf(api_url, sizeof(api_url), "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=%s", api_key);
 
     curl = curl_easy_init();
@@ -664,8 +843,8 @@ int main(int argc, char *argv[]) {
 
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Content-Type: application/json");
-    response.data = malloc(1);
-    if (!response.data) { /* Handle Malloc failure */ free(post_data); curl_easy_cleanup(curl); curl_slist_free_all(headers); return 1; }
+    response.data = malloc(1); // Start with minimal allocation
+    if (!response.data) { fprintf(stderr, "Initial malloc failed for response data\n"); free(post_data); curl_easy_cleanup(curl); curl_slist_free_all(headers); return 1; }
     response.data[0] = '\0';
     response.size = 0;
 
@@ -675,9 +854,9 @@ int main(int argc, char *argv[]) {
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 0L); // Disable default fail on error to handle API JSON errors
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 90L); // Increased timeout slightly
-    // curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L); // Uncomment for debug
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 0L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 90L);
+    // curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
     printf(ANSI_DIM "Sending request to Gemini...\n" ANSI_RESET);
     res = curl_easy_perform(curl);
@@ -686,19 +865,19 @@ int main(int argc, char *argv[]) {
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 
-    // Check for CURL errors first
-    if (res != CURLE_OK) {
+    // --- Handle Response ---
+    if (res != CURLE_OK) { // Curl Error (Network, DNS, etc.)
         int term_width = get_terminal_width();
-        print_box_top(term_width, ANSI_RED); // Keep error boxed
+        print_box_top(term_width, ANSI_RED);
         print_bordered_line(ANSI_BOLD "CURL Error" ANSI_RESET, term_width, NULL, ANSI_RED, NULL);
-        char error_buf[CURL_ERROR_SIZE*2];
+        char error_buf[CURL_ERROR_SIZE * 2]; // Larger buffer just in case
         snprintf(error_buf, sizeof(error_buf), "Code: %d (%s)", res, curl_easy_strerror(res));
         print_bordered_line(error_buf, term_width, ANSI_RED, ANSI_RED, "->");
-        if (http_code != 0) {
+        if (http_code != 0 && http_code != 200) { // Show HTTP code if relevant and not OK
             snprintf(error_buf, sizeof(error_buf), "HTTP Status: %ld", http_code);
             print_bordered_line(error_buf, term_width, ANSI_RED, ANSI_RED, "->");
         }
-        if (response.size > 0) { // Show response body if available
+        if (response.size > 0) {
             print_bordered_line("--- Response Body Snippet ---", term_width, ANSI_DIM, ANSI_RED, NULL);
              char *resp_copy = strndup(response.data, 200);
              if (resp_copy) {
@@ -711,26 +890,24 @@ int main(int argc, char *argv[]) {
                  }
                  if(line) print_bordered_line("...", term_width, ANSI_DIM, ANSI_RED, "  ");
                  free(resp_copy);
-             }
+             } else { print_bordered_line("(Failed to copy response snippet)", term_width, ANSI_DIM, ANSI_RED, "  "); }
         }
         print_box_bottom(term_width, ANSI_RED);
-    } else {
-        // Check if response data is actually present
+    } else { // Curl request succeeded, check HTTP status and body
         if (response.data && response.size > 0) {
-             // HTTP Code might still indicate an API error (e.g., 400, 429, 500)
-             // parse_and_print_output handles JSON errors within the response body
+            // We have a response body, parse it (handles JSON errors / API errors inside)
             parse_and_print_output(response.data);
-        } else if (http_code == 200) {
-             // Successful HTTP status but empty body - unlikely but possible
+        } else if (http_code >= 200 && http_code < 300) {
+             // Successful HTTP status but empty body
              int term_width = get_terminal_width();
-             print_box_top(term_width, ANSI_YELLOW); // Boxed warning
+             print_box_top(term_width, ANSI_YELLOW);
              print_bordered_line(ANSI_BOLD "API Warning" ANSI_RESET, term_width, NULL, ANSI_YELLOW, NULL);
-             print_bordered_line("Request successful (HTTP 200), but no response body received.", term_width, ANSI_YELLOW, ANSI_YELLOW, "->");
+             print_bordered_line("Request successful (HTTP OK), but no response body received.", term_width, ANSI_YELLOW, ANSI_YELLOW, "->");
              print_box_bottom(term_width, ANSI_YELLOW);
         } else {
-             // Non-200 HTTP status without a CURL error and no response body
+             // Non-successful HTTP status and no response body
              int term_width = get_terminal_width();
-             print_box_top(term_width, ANSI_RED); // Boxed error
+             print_box_top(term_width, ANSI_RED);
              print_bordered_line(ANSI_BOLD "HTTP Error" ANSI_RESET, term_width, NULL, ANSI_RED, NULL);
              char error_buf[100];
              snprintf(error_buf, sizeof(error_buf), "Received HTTP Status: %ld (No response body)", http_code);
@@ -745,6 +922,6 @@ int main(int argc, char *argv[]) {
     free(post_data);
     free(response.data);
 
-    // Return non-zero if curl failed OR http code indicates failure (e.g. >= 400)
+    // Return non-zero if curl failed OR http code indicates failure
     return (res == CURLE_OK && http_code >= 200 && http_code < 300) ? 0 : 1;
 }
